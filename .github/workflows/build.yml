@@ -17,7 +17,7 @@ on:
 
 jobs:
   build:
-    name: Build Driver for GKI ${{ inputs.kernel_version }}
+    name: Build Driver and Server for GKI ${{ inputs.kernel_version }}
     runs-on: ubuntu-24.04
 
     steps:
@@ -41,51 +41,68 @@ jobs:
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r26c
+          ndk-version: r26c # 提供编译用户态代理程序所需的 NDK
 
-      - name: Download GKI Kernel Headers & Create Directories
+      - name: Download & Prepare GKI Kernel Environment
         run: |
           echo "拉取 Google 官方 GKI 源码..."
-          # 替换为谷歌官方的 ACK 仓库，拉取 android14-6.1 分支
           git clone --depth 1 -b android14-6.1 https://android.googlesource.com/kernel/common.git gki_headers
           
-          # 根据构建脚本的硬编码检测逻辑，创建对应的软链接目录进行欺骗
+          echo "初始化内核编译环境 (生成 .config 与核心 scripts)..."
+          cd gki_headers
+          # GKI 6.1 强制要求使用 LLVM 工具链编译
+          make ARCH=arm64 LLVM=1 gki_defconfig
+          make ARCH=arm64 LLVM=1 modules_prepare
+          cd ..
+          
+          echo "建立目录映射，骗过原脚本的绝对路径检测..."
           ln -s $(pwd)/gki_headers $(pwd)/6.12-Android16
           ln -s $(pwd)/gki_headers $(pwd)/6.6-Android15
           ln -s $(pwd)/gki_headers $(pwd)/6.1-Android14
           ln -s $(pwd)/gki_headers $(pwd)/5.15-Android13
           ln -s $(pwd)/gki_headers $(pwd)/5.10-Android13
           ln -s $(pwd)/gki_headers $(pwd)/5.10-Android12
-          
-          echo "软链接映射完成，当前工作区目录结构："
-          ls -la
 
-      - name: Fix Hardcoded Paths
+      - name: Fix Hardcoded Paths in Scripts
         run: |
           chmod +x build_all.sh
           if [ -f "ddk_build_all.sh" ]; then chmod +x ddk_build_all.sh; fi
           
-          # 替换脚本中写死的原作者本地绝对路径
+          # 将作者电脑的绝对路径替换为 GitHub 运行时的当前工作路径
           sed -i "s|/mnt/e/1.CodeRepository/Android/Kernel/lsdriver|$(pwd)/lsdriver|g" build_all.sh
           if [ -f "ddk_build_all.sh" ]; then
             sed -i "s|/mnt/e/1.CodeRepository/Android/Kernel/lsdriver|$(pwd)/lsdriver|g" ddk_build_all.sh
           fi
 
-      - name: Execute Build Script
+      - name: Execute Build Script (Kernel Driver .ko)
         run: |
-          echo "开始为 GKI 编译..."
-          # 通过管道输入 'n' 跳过交互式询问，避免 CI 卡死
+          echo "开始编译底层内核驱动..."
+          # 通过管道自动输入 'n' (不剥离符号)，防止卡死
           echo "n" | ./build_all.sh
 
-      - name: Upload Driver Artifacts
+      - name: Build Android User-space Server
+        run: |
+          echo "开始手动编译 Android 桥接服务端..."
+          # 针对包含 jni 目录的传统 NDK 结构进行强制编译
+          if [ -d "android/jni" ] || [ -d "android" ]; then
+            cd android
+            ndk-build || echo "NDK 编译可能需要不同的参数配置，请检查日志"
+            cd ..
+          else
+            echo "未检测到 android 目录，跳过服务端编译。"
+          fi
+
+      - name: Upload Driver and Server Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: lsdriver-${{ inputs.kernel_version }}-build-outputs
+          # 扩大收集范围，确保把所有可能的生成物（尤其是 android/libs 下的服务端）打包带走
           path: |
             **/*.ko
-            **/*.o
             **/lsdriver*
             out/
+            android/libs/
+            android/obj/
             payload_*.ko
             install_driver.sh
           retention-days: 7
