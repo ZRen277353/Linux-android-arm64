@@ -1,34 +1,40 @@
-name: Build lsdriver (GKI & Standard)
+name: Build lsdriver (Manual Version Selection)
 
+# 仅保留 workflow_dispatch，删除 push 和 pull_request，彻底关闭自动触发
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-  workflow_dispatch: # 允许在 Actions 页面手动触发编译
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: '选择要编译的 GKI 内核版本'
+        required: true
+        default: '6.1'
+        type: choice
+        options:
+          - '5.10'
+          - '5.15'
+          - '6.1'
+          - '6.5'
+          - '6.12'
 
 jobs:
   build:
-    name: Build Kernel Driver and User Tools
+    name: Build Driver for GKI ${{ inputs.kernel_version }}
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          # 必须开启递归克隆，拉取 Capstone, ImGui 等依赖子模块
           submodules: 'recursive'
           fetch-depth: 1
 
       - name: Update Submodules
         run: |
-          # 确保所有子模块同步到最新指定分支
           git submodule update --init --remote --recursive
 
       - name: Setup Build Environment
         run: |
           sudo apt-get update
-          # 安装内核编译与交叉编译常见依赖
           sudo apt-get install -y build-essential bison flex bc libssl-dev \
                libelf-dev python3 git wget curl zip unzip clang lld \
                gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
@@ -36,44 +42,38 @@ jobs:
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r26c # 配置 NDK 环境用于编译用户态 C++ 程序
+          ndk-version: r26c
 
-      - name: Fix Hardcoded Paths and Permissions
+      - name: Prepare Kernel Headers for ${{ inputs.kernel_version }}
+        run: |
+          echo "用户选择的内核版本为: ${{ inputs.kernel_version }}"
+          # 【重要提示】: 此处需要根据选择的版本，动态拉取对应的内核源码或头文件。
+          # 不同的项目或构建环境有不同的拉取方式，通常通过环境变量传递给脚本：
+          # export KERNEL_DIR=$(pwd)/kernel_workspace_${{ inputs.kernel_version }}
+          
+      - name: Fix Hardcoded Paths
         run: |
           chmod +x build_all.sh
           if [ -f "ddk_build_all.sh" ]; then chmod +x ddk_build_all.sh; fi
           
-          # 核心修复：替换 build_all.sh 中写死的作者本地绝对路径
+          # 替换写死的绝对路径为当前动态路径
           sed -i "s|/mnt/e/1.CodeRepository/Android/Kernel/lsdriver|$(pwd)/lsdriver|g" build_all.sh
-          
-          # 预防性修复：如果 ddk_build_all.sh 中也存在类似的写死路径，一并替换
           if [ -f "ddk_build_all.sh" ]; then
             sed -i "s|/mnt/e/1.CodeRepository/Android/Kernel/lsdriver|$(pwd)/lsdriver|g" ddk_build_all.sh
           fi
 
-      - name: Execute Standard Build (build_all.sh)
+      - name: Execute Build Script
         run: |
-          echo "Starting standard build..."
-          # 自动输入 'n' (不剥离符号，保留调试信息) 以解决交互卡死的问题
-          # 若需减小体积可将 "n" 改为 "y"
+          echo "开始为 GKI ${{ inputs.kernel_version }} 进行编译..."
+          # 您可以根据脚本特性，选择向脚本中传入环境变量来控制内核版本
+          # 例如: export KERNEL_VERSION=${{ inputs.kernel_version }}
           echo "n" | ./build_all.sh
-
-      - name: Execute DDK Build (ddk_build_all.sh)
-        # 此步骤可选，主要针对 GKI 环境。如果普通编译已经足够，可以删除此步骤。
-        run: |
-          if [ -f "ddk_build_all.sh" ]; then
-            echo "Starting DDK build for GKI..."
-            # 同样处理潜在的交互输入
-            echo "n" | ./ddk_build_all.sh || echo "DDK build failed or needs specific environment"
-          else
-            echo "ddk_build_all.sh not found, skipping."
-          fi
 
       - name: Upload Driver Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lsdriver-build-outputs
-          # 收集生成的内核模块、用户态工具和输出目录
+          # 动态命名输出的压缩包，防止不同版本的文件混淆
+          name: lsdriver-${{ inputs.kernel_version }}-build-outputs
           path: |
             **/*.ko
             **/*.o
