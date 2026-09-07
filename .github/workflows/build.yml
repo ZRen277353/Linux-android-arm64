@@ -9,20 +9,20 @@ on:
 
 jobs:
   build:
-    name: Build Kernel Driver
+    name: Build Kernel Driver and User Tools
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          # 必须开启递归克隆，拉取 Capstone, ImGui, json, thread_pool 等子模块
+          # 必须开启递归克隆，拉取 Capstone, ImGui 等依赖子模块
           submodules: 'recursive'
           fetch-depth: 1
 
       - name: Update Submodules
         run: |
-          # 确保所有子模块同步到官方最新指定分支 (如 next, master, develop)
+          # 确保所有子模块同步到最新指定分支
           git submodule update --init --remote --recursive
 
       - name: Setup Build Environment
@@ -33,29 +33,38 @@ jobs:
                libelf-dev python3 git wget curl zip unzip clang lld \
                gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
-      - name: Download GKI 6.1 Kernel Headers (Optional)
-        # 如果 ddk_build_all.sh 需要依赖外部内核源码树，可以在此下载 GKI 源码或头文件
-        # 视脚本的具体实现，这里提供一个下载通用 GKI 源码的占位符
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26c # 配置 NDK 环境用于编译用户态 C++ 程序
+
+      - name: Fix Hardcoded Paths and Permissions
         run: |
-          echo "Setting up kernel source directory if needed..."
-          # wget https://dl.google.com/android/gki/gki-kernel-6.1-xxx.tar.gz
-          # tar -xzf gki-kernel-6.1-xxx.tar.gz -C /tmp/kernel_src
-          # echo "KERNEL_DIR=/tmp/kernel_src" >> $GITHUB_ENV
+          chmod +x build_all.sh
+          if [ -f "ddk_build_all.sh" ]; then chmod +x ddk_build_all.sh; fi
+          
+          # 核心修复：替换 build_all.sh 中写死的作者本地绝对路径
+          sed -i "s|/mnt/e/1.CodeRepository/Android/Kernel/lsdriver|$(pwd)/lsdriver|g" build_all.sh
+          
+          # 预防性修复：如果 ddk_build_all.sh 中也存在类似的写死路径，一并替换
+          if [ -f "ddk_build_all.sh" ]; then
+            sed -i "s|/mnt/e/1.CodeRepository/Android/Kernel/lsdriver|$(pwd)/lsdriver|g" ddk_build_all.sh
+          fi
 
       - name: Execute Standard Build (build_all.sh)
         run: |
           echo "Starting standard build..."
-          chmod +x build_all.sh
-          # 如果脚本需要特定的环境变量，可以在这里注入
-          ./build_all.sh
+          # 自动输入 'n' (不剥离符号，保留调试信息) 以解决交互卡死的问题
+          # 若需减小体积可将 "n" 改为 "y"
+          echo "n" | ./build_all.sh
 
       - name: Execute DDK Build (ddk_build_all.sh)
+        # 此步骤可选，主要针对 GKI 环境。如果普通编译已经足够，可以删除此步骤。
         run: |
-          # DDK 编译通常用于 GKI 模块适配
           if [ -f "ddk_build_all.sh" ]; then
             echo "Starting DDK build for GKI..."
-            chmod +x ddk_build_all.sh
-            ./ddk_build_all.sh
+            # 同样处理潜在的交互输入
+            echo "n" | ./ddk_build_all.sh || echo "DDK build failed or needs specific environment"
           else
             echo "ddk_build_all.sh not found, skipping."
           fi
@@ -64,9 +73,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lsdriver-build-outputs
-          # 收集编译生成的内核模块 (.ko) 和测试用的用户态程序
+          # 收集生成的内核模块、用户态工具和输出目录
           path: |
             **/*.ko
             **/*.o
             **/lsdriver*
+            out/
           retention-days: 7
