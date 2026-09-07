@@ -45,9 +45,9 @@ jobs:
 
       - name: Download GKI Kernel Headers & Create Directories
         run: |
-          echo "拉取 GKI 通用头文件..."
-          # 拉取 KernelSU 社区提取的通用 GKI 头文件以供编译依赖
-          git clone --depth 1 -b android14-6.1 https://github.com/tiann/android_kernel_common_headers.git gki_headers
+          echo "拉取 Google 官方 GKI 源码..."
+          # 替换为谷歌官方的 ACK 仓库，拉取 android14-6.1 分支
+          git clone --depth 1 -b android14-6.1 https://android.googlesource.com/kernel/common.git gki_headers
           
           # 根据构建脚本的硬编码检测逻辑，创建对应的软链接目录进行欺骗
           ln -s $(pwd)/gki_headers $(pwd)/6.12-Android16
