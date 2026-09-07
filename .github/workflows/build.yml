@@ -1,6 +1,5 @@
 name: Build lsdriver (Manual Version Selection)
 
-# 仅保留 workflow_dispatch，删除 push 和 pull_request，彻底关闭自动触发
 on:
   workflow_dispatch:
     inputs:
@@ -44,19 +43,29 @@ jobs:
         with:
           ndk-version: r26c
 
-      - name: Prepare Kernel Headers for ${{ inputs.kernel_version }}
+      - name: Download GKI Kernel Headers & Create Directories
         run: |
-          echo "用户选择的内核版本为: ${{ inputs.kernel_version }}"
-          # 【重要提示】: 此处需要根据选择的版本，动态拉取对应的内核源码或头文件。
-          # 不同的项目或构建环境有不同的拉取方式，通常通过环境变量传递给脚本：
-          # export KERNEL_DIR=$(pwd)/kernel_workspace_${{ inputs.kernel_version }}
+          echo "拉取 GKI 通用头文件..."
+          # 拉取 KernelSU 社区提取的通用 GKI 头文件以供编译依赖
+          git clone --depth 1 -b android14-6.1 https://github.com/tiann/android_kernel_common_headers.git gki_headers
           
+          # 根据构建脚本的硬编码检测逻辑，创建对应的软链接目录进行欺骗
+          ln -s $(pwd)/gki_headers $(pwd)/6.12-Android16
+          ln -s $(pwd)/gki_headers $(pwd)/6.6-Android15
+          ln -s $(pwd)/gki_headers $(pwd)/6.1-Android14
+          ln -s $(pwd)/gki_headers $(pwd)/5.15-Android13
+          ln -s $(pwd)/gki_headers $(pwd)/5.10-Android13
+          ln -s $(pwd)/gki_headers $(pwd)/5.10-Android12
+          
+          echo "软链接映射完成，当前工作区目录结构："
+          ls -la
+
       - name: Fix Hardcoded Paths
         run: |
           chmod +x build_all.sh
           if [ -f "ddk_build_all.sh" ]; then chmod +x ddk_build_all.sh; fi
           
-          # 替换写死的绝对路径为当前动态路径
+          # 替换脚本中写死的原作者本地绝对路径
           sed -i "s|/mnt/e/1.CodeRepository/Android/Kernel/lsdriver|$(pwd)/lsdriver|g" build_all.sh
           if [ -f "ddk_build_all.sh" ]; then
             sed -i "s|/mnt/e/1.CodeRepository/Android/Kernel/lsdriver|$(pwd)/lsdriver|g" ddk_build_all.sh
@@ -64,19 +73,19 @@ jobs:
 
       - name: Execute Build Script
         run: |
-          echo "开始为 GKI ${{ inputs.kernel_version }} 进行编译..."
-          # 您可以根据脚本特性，选择向脚本中传入环境变量来控制内核版本
-          # 例如: export KERNEL_VERSION=${{ inputs.kernel_version }}
+          echo "开始为 GKI 编译..."
+          # 通过管道输入 'n' 跳过交互式询问，避免 CI 卡死
           echo "n" | ./build_all.sh
 
       - name: Upload Driver Artifacts
         uses: actions/upload-artifact@v4
         with:
-          # 动态命名输出的压缩包，防止不同版本的文件混淆
           name: lsdriver-${{ inputs.kernel_version }}-build-outputs
           path: |
             **/*.ko
             **/*.o
             **/lsdriver*
             out/
+            payload_*.ko
+            install_driver.sh
           retention-days: 7
